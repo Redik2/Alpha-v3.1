@@ -91,6 +91,10 @@ class Memory:
         self.data["channels"][channel].append(message)
             
     def add_note(self, note: Note) -> None:
+        for note_ in self.data["notes"]:
+            if note_.id == note.id:
+                self.data["notes"][self.data["notes"].index(note_)] = note
+                return
         self.data["notes"].append(note)
             
     def remove_note(self, id: int) -> None:
@@ -104,7 +108,7 @@ class Memory:
         
     def get_messages(self, channel: Channel) -> List[Message]:
         all_messages = self.data["channels"].get(channel, [])
-        return all_messages[-5:] if len(all_messages) >= 5 else all_messages[:]
+        return all_messages[-10:] if len(all_messages) >= 10 else all_messages[:]
     
     def find_channel(self, channel_type: int, channel_id: int) -> Optional[Channel]:
         for ch in self.data["channels"].keys():

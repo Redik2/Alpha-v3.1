@@ -19,7 +19,7 @@ class Alpha:
             self.current_channel = Channel(channel_type, channel_id)
             self.memory.add_channel(self.current_channel)
 
-    def process_message(self, text: str, author: str = "user") -> str:
+    def process_message(self, text: str, author: str = "user") -> dict:
         """Основной метод для обработки входящего сообщения"""
         if not self.current_channel:
             raise ValueError("Channel not selected!")
@@ -48,6 +48,7 @@ class Alpha:
             prompt_dict["your_notes"][i]["timestamp"] = naturaltime(datetime.now() - datetime.fromtimestamp(prompt_dict["your_notes"][i]["timestamp"]))
 
         dynamic_prompt = json.dumps(prompt_dict, ensure_ascii=False, indent=2)
+        print(dynamic_prompt)
 
 
         messages.append({"role": "user", "content": "```json\n" + prompts.user + dynamic_prompt + "\n```"})
@@ -56,7 +57,7 @@ class Alpha:
         self.memory.add_message(self.current_channel, new_msg)
 
         # Отправляем запрос к LLM
-        print(json.dumps(messages, indent=2, ensure_ascii=False))
+        #print(json.dumps(messages, indent=2, ensure_ascii=False))
         response = send_request(messages, API_KEY).strip().removeprefix("```json\n").removesuffix("\n```")
         print("Response:")
         print(response)
@@ -72,9 +73,9 @@ class Alpha:
         )
 
         # Добавляем в память
-        self.memory.add_message(self.current_channel, new_msg)
+        #self.memory.add_message(self.current_channel, new_msg)
 
-        new_notes = response["new_notes"]
+        new_notes = response["new_notes_or_edit_notes"]
         for note in new_notes:
             self.memory.add_note(Note(
                 timestamp=datetime.now().timestamp(),
@@ -88,14 +89,12 @@ class Alpha:
         self.save_memory()
 
         # Обрабатываем ответ
-        return self._handle_response(response["message_sequence"][0]["content"])
+        return self._handle_response(response)
 
     def _handle_response(self, response: str) -> str:
         """Обработка ответа от LLM, выполнение команд"""
         if not response:
             return None
-        if response.startswith("!"):
-            return self._execute_command(response)
         return response
 
     def _execute_command(self, command: str) -> str:

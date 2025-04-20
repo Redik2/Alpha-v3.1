@@ -21,8 +21,7 @@ def send_request(messages: list, key: str) -> str:
       ]
 
     }
-    }),
-    timeout=20
+    })
     )
     try:
         return response.json()["choices"][0]["message"]["content"]

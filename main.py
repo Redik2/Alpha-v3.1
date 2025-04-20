@@ -1,5 +1,6 @@
 from src.alpha import Alpha
 from src.memory import ChannelTypes
+from src.discord_module import DiscordBot
 
 def main():
     alpha = Alpha()
@@ -16,5 +17,11 @@ def main():
         answer = alpha.process_message(req.split(": ")[1], req.split(": ")[0])
         print(answer)
 
+def discord():
+    alpha = Alpha()
+    bot = DiscordBot(alpha=alpha)
+
+    bot.run()
+
 if __name__ == "__main__":
-    main()
+    discord()
