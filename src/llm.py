@@ -11,15 +11,23 @@ def send_request(messages: list, key: str) -> str:
         "X-Title": "Alpha v3"
     },
     data=json.dumps({
-        "model": "deepseek/deepseek-chat-v3-0324:free",
-        "temperature": 0.8,
-        "messages": messages
-    })
+        "model": "deepseek/deepseek-chat:free",
+        "temperature": 0.6,
+        "messages": messages,
+        'provider': {
+            'order': [
+                'Chutes',
+                'Targon'
+      ]
+
+    }
+    }),
+    timeout=20
     )
     try:
         return response.json()["choices"][0]["message"]["content"]
     except Exception as e:
         print("Error!")
         print("Request:\n" + response.request.body)
-        print("Response:\n" + response.json())
+        print("Response:\n" + str(response.json()))
         raise e

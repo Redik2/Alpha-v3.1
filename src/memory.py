@@ -27,6 +27,9 @@ class Channel:
             channel_type=data['type'],
             channel_id=data['id']
         )
+    
+    def __str__(self):
+        return f"{self.type}:{self.id}"
 
 
 class Message:
@@ -50,38 +53,71 @@ class Message:
             author=data['author']
         )
 
+class Note:
+    def __init__(self, timestamp: float, text: str, id: int):
+        self.timestamp = timestamp
+        self.text = text
+        self.id = id
+        
+    def to_dict(self) -> dict:
+        return {
+            'timestamp': self.timestamp,
+            'text': self.text,
+            'id': self.id
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Message':
+        return cls(
+            timestamp=data['timestamp'],
+            text=data['text'],
+            id=data['id']
+        )
+
 
 class Memory:
     def __init__(self, file_path: str = 'memory.json'):
         self.file_path = file_path
         self.data: Dict[Channel, List[Message]] = {}
         self.load()
-        
-    def _channel_key(self, channel: Channel) -> str:
-        return f"{channel.type}:{channel.id}"
     
     def add_channel(self, channel: Channel) -> None:
-        if channel not in self.data:
-            self.data[channel] = []
+        if channel not in self.data["channels"]:
+            self.data["channels"][channel] = []
             
     def add_message(self, channel: Channel, message: Message) -> None:
-        if channel not in self.data:
+        if channel not in self.data["channels"]:
             self.add_channel(channel)
-        self.data[channel].append(message)
+        self.data["channels"][channel].append(message)
+            
+    def add_note(self, note: Note) -> None:
+        self.data["notes"].append(note)
+            
+    def remove_note(self, id: int) -> None:
+        for note in self.data["notes"]:
+            if note.id == id:
+                self.data["notes"].remove(note)
+                return
+    
+    def get_notes(self) -> List[Note]:
+        return self.data["notes"]
         
     def get_messages(self, channel: Channel) -> List[Message]:
-        return self.data.get(channel, [])
+        all_messages = self.data["channels"].get(channel, [])
+        return all_messages[-5:] if len(all_messages) >= 5 else all_messages[:]
     
     def find_channel(self, channel_type: int, channel_id: int) -> Optional[Channel]:
-        for ch in self.data.keys():
+        for ch in self.data["channels"].keys():
             if ch.type == channel_type and ch.id == channel_id:
                 return ch
         return None
     
     def save(self) -> None:
-        serialized = {
-            self._channel_key(channel): [msg.to_dict() for msg in messages]
-            for channel, messages in self.data.items()
+        serialized = {"channels": {
+            str(channel): [msg.to_dict() for msg in messages]
+            for channel, messages in self.data["channels"].items()
+        },
+        "notes": [note.to_dict() for note in self.data["notes"]]
         }
         with open(self.file_path, 'w', encoding="utf-8") as f:
             json.dump(serialized, f, indent=4, ensure_ascii=False)
@@ -91,11 +127,15 @@ class Memory:
             with open(self.file_path, 'r', encoding="utf-8") as f:
                 data = json.load(f)
                 
-            self.data = {}
-            for key, messages in data.items():
+            self.data = {"channels": {}, "notes": []}
+            for key, messages in data["channels"].items():
                 channel_type, channel_id = map(int, key.split(':'))
                 channel = Channel(channel_type, channel_id)
-                self.data[channel] = [Message.from_dict(msg) for msg in messages]
+                self.data["channels"][channel] = [Message.from_dict(msg) for msg in messages]
+            
+            self.data["notes"] = [Note.from_dict(note) for note in data["notes"]]
                 
         except FileNotFoundError:
-            self.data = {}
+            self.data = {"channels": {}, "notes": []}
+        except KeyError:
+            self.data = {"channels": {}, "notes": []}
