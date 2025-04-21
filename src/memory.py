@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, LiteralString
 
 
 class ChannelTypes:
@@ -54,16 +54,18 @@ class Message:
         )
 
 class Note:
-    def __init__(self, timestamp: float, text: str, id: int):
+    def __init__(self, timestamp: float, text: str, id: int, type: str):
         self.timestamp = timestamp
         self.text = text
         self.id = id
+        self.type = type
         
     def to_dict(self) -> dict:
         return {
             'timestamp': self.timestamp,
             'text': self.text,
-            'id': self.id
+            'id': self.id,
+            'type': self.type
         }
     
     @classmethod
@@ -71,14 +73,16 @@ class Note:
         return cls(
             timestamp=data['timestamp'],
             text=data['text'],
-            id=data['id']
+            id=data['id'],
+            type=data['type']
         )
 
 
 class Memory:
     def __init__(self, file_path: str = 'memory.json'):
         self.file_path = file_path
-        self.data: Dict[Channel, List[Message]] = {}
+        self.data: Dict[str, Dict[Channel, List[Message]] | List[Note]] = {}
+        self.notes_edit_counter = 0
         self.load()
     
     def add_channel(self, channel: Channel) -> None:
@@ -96,12 +100,22 @@ class Memory:
                 self.data["notes"][self.data["notes"].index(note_)] = note
                 return
         self.data["notes"].append(note)
+
+        self.notes_edit_counter += 1
+        if self.notes_edit_counter > 10:
+            self.notes_edit_counter = 0
+            self.create_backup_notes()
             
     def remove_note(self, id: int) -> None:
         for note in self.data["notes"]:
             if note.id == id:
                 self.data["notes"].remove(note)
                 return
+
+        self.notes_edit_counter += 1
+        if self.notes_edit_counter > 10:
+            self.notes_edit_counter = 0
+            self.create_backup_notes()
     
     def get_notes(self) -> List[Note]:
         return self.data["notes"]
@@ -116,6 +130,12 @@ class Memory:
                 return ch
         return None
     
+    def clear_channel(self, channel: Channel) -> None:
+        channel = self.find_channel(channel.type, channel.id)
+        if not channel:
+            return
+        self.data["channels"][channel].clear()
+    
     def save(self) -> None:
         serialized = {"channels": {
             str(channel): [msg.to_dict() for msg in messages]
@@ -125,6 +145,17 @@ class Memory:
         }
         with open(self.file_path, 'w', encoding="utf-8") as f:
             json.dump(serialized, f, indent=4, ensure_ascii=False)
+        
+    
+    def create_backup_notes(self) -> None:
+        serialized = {
+        "notes": [note.to_dict() for note in self.data["notes"]]
+        }
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"notes_backup_{timestamp}.json"
+        with open(f"notes_backup/{backup_name}", 'x', encoding="utf-8") as f:
+            json.dump(serialized, f, indent=4, ensure_ascii=False)
+    
             
     def load(self) -> None:
         try:

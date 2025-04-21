@@ -10,7 +10,7 @@ from keys import discord_token
 import random
 
 
-CHANNEL_ID = 1124005435507212318
+CHANNEL_ID = 1074390741238956163
 
 
 class DiscordBot:
@@ -20,6 +20,8 @@ class DiscordBot:
         self.bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
         self.active_tasks: Dict[int, asyncio.Task] = {}  # ID канала: активная задача
         
+        self.alpha.set_channel(ChannelTypes.discord, CHANNEL_ID)
+
         # Регистрация обработчиков событий
         self.bot.add_listener(self.on_ready)
         self.bot.add_listener(self.on_message)
@@ -29,14 +31,18 @@ class DiscordBot:
         try:
             for i in range(len(message_sequence)):
                 if message_sequence[i] is None:
-                    return
+                    waiting_tyme = max(message_sequence[i + 1]["delay_sec"] * (0.75 + random.random() * 0.5), 0)
+                    if i + 1 < len(message_sequence):
+                        await asyncio.sleep(waiting_tyme)
+                    continue
                 typing_time = len(message_sequence[i]["content"]) * 0.05 * (0.75 + random.random() * 0.5)
-                waiting_tyme = max(message_sequence[i + 1]["delay_sec"] * (0.75 + random.random() * 0.5) - typing_time, 0)
 
                 async with channel.typing():
                     await asyncio.sleep(typing_time)
-                await channel.send(message_sequence[i]["content"])
+                if message_sequence[i]:
+                    await channel.send(message_sequence[i]["content"])
                 if i + 1 < len(message_sequence):
+                    waiting_tyme = max(message_sequence[i + 1]["delay_sec"] * (0.75 + random.random() * 0.5) - typing_time, 0)
                     await asyncio.sleep(waiting_tyme)
         except asyncio.CancelledError:
             return
@@ -58,11 +64,47 @@ class DiscordBot:
             # Удаление происходит в finally блока send_delayed_messages
 
     async def on_ready(self):
-        print(f"Бот {self.bot.user} подключился к Discord!")
+        print(f"Пользователь {self.bot.user} подключился к Discord!")
         self.alpha.set_channel(ChannelTypes.discord, CHANNEL_ID)
+        self.alpha.add_startup_message()
+
+    async def clear(self, ctx):
+        """Очищает историю сообщений канала"""
+        if not ctx.author.guild_permissions.administrator:
+            return await ctx.reply("!Требуются права администратора!")
+            
+        channel = self.alpha.current_channel
+        if channel and channel.id == ctx.channel.id:
+            # Очищаем сообщения и заметки связанные с каналом
+            if self.alpha.clear_current_channel():
+                await ctx.reply(f"!История канала {ctx.channel.name} очищена!")
+            else:
+                await ctx.reply(f"!Ошибка: неизвестная ошибка")
+        else:
+            await ctx.reply("!Ошибка: канал не найден в памяти")
+
+    async def clear_notes(self, ctx):
+        """Очищает заметки"""
+        if not ctx.author.guild_permissions.administrator:
+            return await ctx.reply("!Требуются права администратора!")
+        
+        # Очищаем сообщения и заметки связанные с каналом
+        if self.alpha.clear_notes():
+            await ctx.reply(f"!История заметок очищена!")
+        else:
+            await ctx.reply(f"!Ошибка: неизвестная ошибка")
+    
+    async def on_command(self, message):
+        if message.content.startswith("!clear_notes"):
+            await self.clear_notes(message)
+        elif message.content.startswith("!clear"):
+            await self.clear(message)
 
     async def on_message(self, message: discord.Message):
         if message.channel.id != self.alpha.current_channel.id:
+            return
+        if message.content.startswith("!"):
+            await self.on_command(message)
             return
         if message.author.bot:
             self.alpha.memory.add_message(self.alpha.current_channel,
@@ -76,15 +118,17 @@ class DiscordBot:
         # Прерываем текущую цепочку сообщений в этом канале
         await self.cancel_pending_messages(message.channel.id)
         
-        self.alpha.set_channel(ChannelTypes.discord, message.channel.id)
-        
         try:
             response = self.alpha.process_message(
                 text=message.content,
-                author=str(message.author)
+                author=str(message.author.display_name)
             )
-            
-            message_sequence = response.get("message_sequence", [])
+            print("==========================================================================")
+            print(response)
+            message_sequence: list = response.get("message_sequence", [])
+            dialog_iniciation = response.get("dialog_iniciation", None)
+            if dialog_iniciation:
+                message_sequence.append({"delay_sec": dialog_iniciation["time"], "content": dialog_iniciation["content"]})
             
             if message_sequence:
                 # Создаем новую задачу и сохраняем ее
@@ -96,7 +140,12 @@ class DiscordBot:
         except Exception as e:
             await message.channel.send(f"Ошибка: {str(e)}")
             print(f"Discord Error: {str(e)}")
-
+            raise e
+    
     def run(self):
         """Запуск бота"""
-        self.bot.run(self.token)
+        try:
+            self.bot.run(self.token)
+        except Exception as e:
+            self.alpha.add_error_message()
+            raise e

@@ -1,6 +1,7 @@
 from src.alpha import Alpha
 from src.memory import ChannelTypes
 from src.discord_module import DiscordBot
+import atexit
 
 def main():
     alpha = Alpha()
@@ -21,6 +22,7 @@ def discord():
     alpha = Alpha()
     bot = DiscordBot(alpha=alpha)
 
+    atexit.register(alpha.add_shutdown_message)
     bot.run()
 
 if __name__ == "__main__":

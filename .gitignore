@@ -1,3 +1,5 @@
 *.cpython-312.pyc
 .vscode
 *.key
+alpha_memory.json
+notes_backup
