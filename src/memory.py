@@ -153,7 +153,7 @@ class Memory:
         }
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_name = f"notes_backup_{timestamp}.json"
-        with open(f"notes_backup/{backup_name}", 'x', encoding="utf-8") as f:
+        with open(f"notes_backups/{backup_name}", 'x', encoding="utf-8") as f:
             json.dump(serialized, f, indent=4, ensure_ascii=False)
     
             

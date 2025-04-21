@@ -4,7 +4,7 @@ import requests
 def send_request(messages: list, key: str) -> str:
     try:
         response = None
-        for i in range(10):
+        for i in range(3):
             try:
                 response = requests.post(
                 url="https://openrouter.ai/api/v1/chat/completions",
@@ -21,8 +21,11 @@ def send_request(messages: list, key: str) -> str:
                         "deepseek/deepseek-v3-base:free"
                     ],
                     "temperature": 0.6,
-                    "messages": messages
-                }), timeout=40
+                    "messages": messages,
+                    'provider': {
+                        'sort': 'latency'
+                    }
+                }), timeout=30
                 )
             except requests.Timeout:
                 response = None

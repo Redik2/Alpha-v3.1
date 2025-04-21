@@ -23,6 +23,7 @@ def discord():
     bot = DiscordBot(alpha=alpha)
 
     atexit.register(alpha.add_shutdown_message)
+    atexit.register(alpha.memory.create_backup_notes)
     bot.run()
 
 if __name__ == "__main__":
