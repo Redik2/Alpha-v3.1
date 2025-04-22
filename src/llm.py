@@ -1,41 +1,51 @@
+import aiohttp
 import json
-import requests
+from typing import AsyncIterator
 
-def send_request(messages: list, key: str) -> str:
-    try:
-        response = None
-        for i in range(3):
-            try:
-                response = requests.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://localhost",
-                    "X-Title": "Alpha v3"
-                },
-                data=json.dumps({
-                    "models": [
-                        "deepseek/deepseek-chat:free",
-                        "deepseek/deepseek-chat-v3-0324:free",
-                        "deepseek/deepseek-v3-base:free"
-                    ],
-                    "temperature": 0.6,
-                    "messages": messages,
-                    'provider': {
-                        'sort': 'latency'
-                    }
-                }), timeout=30
-                )
-            except requests.Timeout:
-                response = None
-            if response:
-                return response.json()["choices"][0]["message"]["content"]
-            
-            return response.json()["choices"][0]["message"]["content"]
-        raise requests.Timeout
-    except Exception as e:
-        print("Error!")
-        print("Request:\n" + response.request.body)
-        print("Response:\n" + str(response.json()))
-        raise e
+async def send_stream_request(
+    messages: list[dict], 
+    key: str
+) -> AsyncIterator[str]:
+    """
+    Выполняет POST-запрос с stream=True и построчно отдаёт
+    блоки контента ('content') из SSE-ответа.
+    """
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://localhost",
+        "X-Title": "Alpha v3"
+    }
+    payload = {
+        "model": "deepseek/deepseek-chat:free",
+        "temperature": 0.4,
+        "messages": messages,
+        "stream": True,
+        "provider": {"sort": "latency"}
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers) as resp:
+            resp.raise_for_status()
+            # Читаем ответ построчно
+            async for raw_line in resp.content:
+                line = raw_line.decode('utf-8').strip()
+                # Игнорируем всё, что не начинается с "data: "
+                if not line.startswith("data: "):
+                    continue
+
+                data_str = line[len("data: "):]
+                # Конец стрима
+                if data_str == "[DONE]":
+                    break
+
+                try:
+                    msg = json.loads(data_str)
+                    delta = msg["choices"][0].get("delta", {})
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+                # Если в дельте есть контент — отдаём его как следующий кусок
+                if content := delta.get("content"):
+                    yield content

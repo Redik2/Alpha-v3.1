@@ -2,13 +2,15 @@ from datetime import datetime
 from typing import List, Optional
 from src.memory import Memory, Message, Channel, MemoryCell
 from keys import openrouter_free as API_KEY
-from src.llm import send_request
+from src.llm import send_stream_request
 import prompts
 import json
 from humanize import naturaltime
 import time
 from src import utils
 import discord
+import ijson
+from typing import AsyncIterator
 
 
 class Alpha:
@@ -71,11 +73,35 @@ class Alpha:
         self.memory.save()
         return True
 
-    def process_message(self, new_msg: Message, message_discord: discord.Message | None = None) -> dict:
-        """Основной метод для обработки входящего сообщения"""
+    async def process_message_stream(self, new_msg: Message, message_discord: discord.Message | None = None):
         if not self.current_channel:
             raise ValueError("Channel not selected!")
         
+        full_sequence = []
+        buffer = ""
+        tasks_was = []
+
+        async for chunk in self._get_stream_response(new_msg, message_discord):
+            for ch in chunk:
+                buffer += ch
+                buffer = buffer.removeprefix("```json\n").removesuffix("\n```")
+                post_processed_buffer = buffer + "\n  ]\n}" if not buffer.endswith("\n  ]\n}") else buffer
+                try:
+                    tasks = json.loads(post_processed_buffer).get("action_sequence")
+                    for i in range(len(tasks)):
+                        if i in tasks_was:
+                            continue
+                        tasks_was.append(i)
+                        yield tasks[i]
+                    
+                except json.JSONDecodeError:
+                    continue
+
+    async def _get_stream_response(
+        self, 
+        new_msg: Message, 
+        message_discord: discord.Message
+    ) -> AsyncIterator[str]:
         
         # Сообщения на отправку
         messages = [{"role": "system", "content": prompts.system_sequence_logic_v2}]
@@ -86,7 +112,8 @@ class Alpha:
                 "author": msg.author.replace("Alpha", "Alpha (ты)"),
                 "content": msg.text,
                 "relative_time": naturaltime(datetime.now() - datetime.fromtimestamp(msg.timestamp)),
-                "id": msg.id
+                "id": msg.id,
+                "meta-information": msg.metainfo
             }
             for msg in self.memory.get_messages(self.current_channel)
         ]
@@ -94,39 +121,65 @@ class Alpha:
 
         prompt_dict = {
             "Память": {},
-            "message_history": context,
-            "new_message_id": new_msg.id,
-            "author": new_msg.author, "content": new_msg.text,
             "time_now": time.strftime("%Y %B %d %H:%M:%S", time.localtime(new_msg.timestamp))
         }
+        prompt_memory = {}
         for topic in self.memory.get_memory().keys():
-            prompt_dict["Память"][topic] = "\n".join([f"{cell.id}: {cell.text} ({naturaltime(datetime.now() - datetime.fromtimestamp(cell.timestamp))})" for cell in self.memory.get_memory()[topic]])
+            prompt_memory[topic] = [
+                {
+                    "id": cell.id,
+                    "content": cell.text,
+                    "last_time_updated": naturaltime(datetime.now() - datetime.fromtimestamp(cell.timestamp))
+                } for cell in self.memory.get_memory()[topic]
+            ]
+        
+        new_msg_prompt = {
+            "new_message_id": new_msg.id,
+            "author": new_msg.author,
+            "content": new_msg.text,
+            "meta-information": new_msg.metainfo
+        }
 
         #for topic in prompt_dict["Память"].keys():
         #    for i in range(len(prompt_dict["Память"][topic])):
         #        prompt_dict["Память"][topic][i]["last_time_updated"] = naturaltime(datetime.now() - datetime.fromtimestamp(prompt_dict["Память"][topic][i]["timestamp"]))
         #        prompt_dict["Память"][topic][i].pop("timestamp")
-        
-
-        dynamic_prompt = json.dumps(prompt_dict, ensure_ascii=False, indent=2)
-        print(dynamic_prompt)
 
 
-        messages.append({"role": "user", "content": "```json\n" + prompts.user + utils.replace_mentions_with_nicks(dynamic_prompt, message_discord) if message_discord else dynamic_prompt + "\n```"})
-        
+        messages.append(
+                {
+                    "role": "user",
+                    "content": "```json\n" + prompts.user + "Твоя память:\n" + self.preprocess(json.dumps(prompt_memory, ensure_ascii=False, indent=2), message_discord) + "\n```\n**ВАЖНО УЧИТЫВАТЬ ВСЮ ПАМЯТЬ!!! НЕ ЗАБУДЬ НИ ОДНУ ЗАПИСЬ!**"
+                }
+        )
+        messages.append({"role": "assistant", "content": "Хорошо, все эти записи будут учтены! Я ничего не забуду."})
+        messages.append(
+                {
+                    "role": "user",
+                    "content": "```json\n" + prompts.user + "История сообщений:\n" + self.preprocess(json.dumps(context, ensure_ascii=False, indent=2), message_discord) + "\n```\n**НЕ ПОВТОРЯЙ СООБЩЕНИЯ, КОТОРЫЕ УЖЕ ОТПРАВЛЯЛА**\nВ следующем сообщении отправь только json!!!"
+                }
+        )
+        messages.append({"role": "assistant", "content": "Отлично, я буду учитывать эту историю сообщений, чтобы ответить максимально соответствующе. Так же я буду стараться не повторять сообщения, которые уже задавала."})
+        messages.append(
+                {
+                    "role": "user",
+                    "content": "```json\n" + prompts.user + self.preprocess(json.dumps(new_msg_prompt, ensure_ascii=False, indent=2), message_discord) + "\n```\nP.S. Используй функции, которые тебе известны, на максимум. Запоминай, изменяй, общайся, использу задержку чтобы казаться естественнее. Не отправляй слишком длинный send_message. Лучше разделить на несколько действий с задержками между ними.\n#### **ОПИРАЙСЯ НА СВОИ ВОСПОМИНАНИЯ ПРИ ОТВЕТЕ**\n#### **СЛЕДИ, ЗАПОМИНАЙ, УДАЛЯЙ И ИЗМЕНЯЙ ВОСПОМИНАНИЯ, ЧТОБЫ СДЕЛАТЬ ИХ АККУРАТНЕЕ, ПОНЯТНЕЕ И ЭФФЕКТИВНЕЕ ВНЕ ЗАВИСИМОСТИ ОТ КОНТЕКСТА**\nРасписывай action_sequence на час вперед. Если люди не будут писать долгое время, то action_sequence продолжит свое выполнение."
+                }
+        )
+        messages.append({"role": "assistant", "content": "```json\n"})
+
         # Добавляем в память
         self.memory.add_message(self.current_channel, new_msg)
 
-        # Отправляем запрос к LLM
-        #print(json.dumps(messages, indent=2, ensure_ascii=False))
-        response = send_request(messages, API_KEY).strip().removeprefix("```json\n").removesuffix("\n```")
-        print("Response:")
-        print(response)
-        response = json.loads(response)
-        self.save_memory()
-
-        # Обрабатываем ответ
-        return self._handle_response(response)
+        dynamic_prompt = json.dumps(messages, ensure_ascii=False, indent=2)
+        for msg in messages:
+            print(json.dumps(msg, ensure_ascii=False, indent=2))
+        
+        async for chunk in send_stream_request(messages, API_KEY):
+            yield chunk
+    
+    def preprocess(self, text: str, message: discord.Message | None = None):
+        return utils.replace_mentions_with_nicks(text, message) if message else text
 
     def _handle_response(self, response: str) -> str:
         """Обработка ответа от LLM, выполнение команд"""

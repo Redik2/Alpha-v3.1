@@ -33,18 +33,20 @@ class Channel:
 
 
 class Message:
-    def __init__(self, timestamp: float, text: str, author: str, id: int = -1):
+    def __init__(self, timestamp: float, text: str, author: str, metainfo: dict = {}, id: int = -1):
         self.timestamp = timestamp
         self.text = text
         self.author = author
         self.id = id
+        self.metainfo = metainfo
         
     def to_dict(self) -> dict:
         return {
             'timestamp': self.timestamp,
             'text': self.text,
             'author': self.author,
-            'id': self.id
+            'id': self.id,
+            'meta-information': self.metainfo
         }
     
     @classmethod
@@ -53,7 +55,8 @@ class Message:
             timestamp=data['timestamp'],
             text=data['text'],
             author=data['author'],
-            id=data['id'] if "id" in data.keys() else -1
+            id=data['id'] if "id" in data.keys() else -1,
+            metainfo=data['meta-information'] if "meta-information" in data.keys() else {}
         )
 
 class MemoryCell:
@@ -141,11 +144,12 @@ class Memory:
         self.data["channels"][channel].clear()
     
     def save(self) -> None:
-        serialized = {"channels": {
+        serialized = {
+        "memory": {},
+        "channels": {
             str(channel): [msg.to_dict() for msg in messages]
             for channel, messages in self.data["channels"].items()
-        },
-        "memory": {}
+        }
         }
         for topic in self.data["memory"].keys():
             serialized["memory"][topic] = [cell.to_dict() for cell in self.data["memory"][topic]]
