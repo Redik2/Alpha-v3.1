@@ -5,12 +5,13 @@ from datetime import datetime
 from typing import Optional, Dict
 from discord.ext import commands
 from src.alpha import Alpha
-from src.memory import ChannelTypes, Message
+from src.memory import ChannelTypes, Message, MemoryCell
 from keys import discord_token
 import random
+import src.utils as utils
 
 
-CHANNEL_ID = 1074390741238956163
+CHANNEL_ID = 828610429897932813
 
 
 class DiscordBot:
@@ -26,24 +27,61 @@ class DiscordBot:
         self.bot.add_listener(self.on_ready)
         self.bot.add_listener(self.on_message)
 
-    async def send_delayed_messages(self, channel: discord.TextChannel, message_sequence: list):
+    async def sequence_process(self, message: discord.Message, sequence: list):
         """Отправляет сообщения с задержками с возможностью прерывания"""
+        channel = message.channel
         try:
-            for i in range(len(message_sequence)):
-                if message_sequence[i] is None:
-                    waiting_tyme = max(message_sequence[i + 1]["delay_sec"] * (0.75 + random.random() * 0.5), 0)
-                    if i + 1 < len(message_sequence):
-                        await asyncio.sleep(waiting_tyme)
-                    continue
-                typing_time = len(message_sequence[i]["content"]) * 0.05 * (0.75 + random.random() * 0.5)
+            for task in sequence:
+                match task["action_name"]:
+                    case "send_message":
+                        typing_time = len(task["content"]) * 0.04 * (0.75 + random.random() * 0.5)
+                        async with channel.typing():
+                            await asyncio.sleep(typing_time)
+                            content = utils.replace_nicks_with_mentions(task["content"], message)
 
-                async with channel.typing():
-                    await asyncio.sleep(typing_time)
-                if message_sequence[i]:
-                    await channel.send(message_sequence[i]["content"])
-                if i + 1 < len(message_sequence):
-                    waiting_tyme = max(message_sequence[i + 1]["delay_sec"] * (0.75 + random.random() * 0.5) - typing_time, 0)
-                    await asyncio.sleep(waiting_tyme)
+                            if not "reply_message_id" in task.keys():
+                                new_msg = await channel.send(content)
+                            else:
+                                msg = await channel.fetch_message(task["reply_message_id"])
+                                new_msg = await msg.reply(content)
+                            
+                            self.alpha.memory.add_message(self.alpha.current_channel,
+                                                        Message(
+                                timestamp=datetime.now().timestamp(),
+                                text=content,
+                                author="Alpha",
+                                id=new_msg.id
+                            ))
+                    case "edit_message":
+                        msg = await channel.fetch_message(task["message_id"])
+                        new_content = task["new_content"]
+                        await msg.edit(content=new_content)
+                        self.alpha.memory.find_message(self.alpha.current_channel, task["message_id"]).text = new_content + " (изменено)"
+
+                    case "wait":
+                        await asyncio.sleep(float(task["seconds"]))
+                    case "remember":
+                        new_memory = MemoryCell(
+                                timestamp = datetime.now().timestamp(),
+                                text = task["content"],
+                                id = utils.generate_id() if not "id" in task.keys() or not task["id"] else task["id"]
+                        )
+                        self.alpha.memory.add_memory(topic=task["topic"], memory=new_memory)
+                    case "forget":
+                        self.alpha.memory.remove_memory(task["topic"], task["id"])
+                    case "modify_memory":
+                        new_memory = MemoryCell(
+                                timestamp = datetime.now().timestamp(),
+                                text = task["content"],
+                                id = task["id"]
+                        )
+                    case "add_reaction_emoji_icon":
+                        try:
+                            msg = await channel.fetch_message(task['message_id'])
+                        except:
+                            continue
+                        await msg.add_reaction(task['emoji'])
+                self.alpha.memory.save()
         except asyncio.CancelledError:
             return
         finally:
@@ -52,7 +90,7 @@ class DiscordBot:
                 del self.active_tasks[channel.id]
 
 
-    async def cancel_pending_messages(self, channel_id: int):
+    async def cancel_pending_sequence(self, channel_id: int):
         """Отменяет текущую задачу отправки сообщений для канала"""
         if channel_id in self.active_tasks:
             task = self.active_tasks[channel_id]
@@ -101,39 +139,32 @@ class DiscordBot:
             await self.clear(message)
 
     async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
         if message.channel.id != self.alpha.current_channel.id:
             return
         if message.content.startswith("!"):
             await self.on_command(message)
             return
-        if message.author.bot:
-            self.alpha.memory.add_message(self.alpha.current_channel,
-                                          Message(
-                timestamp=datetime.now().timestamp(),
-                text=message.content,
-                author="Alpha"
-            ))
-            return
 
         # Прерываем текущую цепочку сообщений в этом канале
-        await self.cancel_pending_messages(message.channel.id)
+        await self.cancel_pending_sequence(message.channel.id)
         
         try:
             response = self.alpha.process_message(
-                text=message.content,
-                author=str(message.author.display_name)
+                Message(timestamp=datetime.now().timestamp(),
+                        text=message.content,
+                        author=message.author.display_name,
+                        id=message.id), message
             )
             print("==========================================================================")
             print(response)
-            message_sequence: list = response.get("message_sequence", [])
-            dialog_iniciation = response.get("dialog_iniciation", None)
-            if dialog_iniciation:
-                message_sequence.append({"delay_sec": dialog_iniciation["time"], "content": dialog_iniciation["content"]})
+            sequence: list = response.get("action_sequence", [])
             
-            if message_sequence:
+            if sequence:
                 # Создаем новую задачу и сохраняем ее
                 task = self.bot.loop.create_task(
-                    self.send_delayed_messages(message.channel, message_sequence)
+                    self.sequence_process(message, sequence)
                 )
                 self.active_tasks[message.channel.id] = task
                 

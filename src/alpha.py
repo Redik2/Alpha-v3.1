@@ -1,12 +1,14 @@
 from datetime import datetime
 from typing import List, Optional
-from src.memory import Memory, Message, Channel, Note
+from src.memory import Memory, Message, Channel, MemoryCell
 from keys import openrouter_free as API_KEY
 from src.llm import send_request
 import prompts
 import json
 from humanize import naturaltime
 import time
+from src import utils
+import discord
 
 
 class Alpha:
@@ -69,60 +71,48 @@ class Alpha:
         self.memory.save()
         return True
 
-    def add_clear_notes_message(self) -> bool:
-        if not self.current_channel:
-            return False
-        new_msg = Message(
-            timestamp=datetime.now().timestamp(),
-            text="Только что все твои заметки были стерты(по прозьбе создателя)",
-            author="system"
-        )
-        self.memory.add_message(self.current_channel, new_msg)
-        self.memory.save()
-        return True
-
-    def process_message(self, text: str, author: str = "user") -> dict:
+    def process_message(self, new_msg: Message, message_discord: discord.Message | None = None) -> dict:
         """Основной метод для обработки входящего сообщения"""
         if not self.current_channel:
             raise ValueError("Channel not selected!")
         
-        # Создаем объект сообщения
-        new_msg = Message(
-            timestamp=datetime.now().timestamp(),
-            text=text,
-            author=author
-        )
-        
         
         # Сообщения на отправку
-        messages = [{"role": "system", "content": prompts.system}]
+        messages = [{"role": "system", "content": prompts.system_sequence_logic_v2}]
 
         # Получаем историю сообщений
         context = [
             {
-                "author": msg.author,
+                "author": msg.author.replace("Alpha", "Alpha (ты)"),
                 "content": msg.text,
                 "relative_time": naturaltime(datetime.now() - datetime.fromtimestamp(msg.timestamp)),
-                "timestamp": time.strftime("%Y %B %d %H:%M:%S", time.localtime(new_msg.timestamp))
+                "id": msg.id
             }
             for msg in self.memory.get_messages(self.current_channel)
         ]
 
 
-        prompt_dict = {"message_history": context,
-                       "your_notes": [note.to_dict() for note in self.memory.get_notes()],
-                       "author": new_msg.author, "content": new_msg.text,
-                       "time_now": time.strftime("%Y %B %d %H:%M:%S", time.localtime(new_msg.timestamp))}
+        prompt_dict = {
+            "Память": {},
+            "message_history": context,
+            "new_message_id": new_msg.id,
+            "author": new_msg.author, "content": new_msg.text,
+            "time_now": time.strftime("%Y %B %d %H:%M:%S", time.localtime(new_msg.timestamp))
+        }
+        for topic in self.memory.get_memory().keys():
+            prompt_dict["Память"][topic] = "\n".join([f"{cell.id}: {cell.text} ({naturaltime(datetime.now() - datetime.fromtimestamp(cell.timestamp))})" for cell in self.memory.get_memory()[topic]])
 
-        for i in range(len(prompt_dict["your_notes"])):
-            prompt_dict["your_notes"][i]["last_time_updated"] = naturaltime(datetime.now() - datetime.fromtimestamp(prompt_dict["your_notes"][i]["timestamp"]))
-            prompt_dict["your_notes"][i].pop("timestamp")
+        #for topic in prompt_dict["Память"].keys():
+        #    for i in range(len(prompt_dict["Память"][topic])):
+        #        prompt_dict["Память"][topic][i]["last_time_updated"] = naturaltime(datetime.now() - datetime.fromtimestamp(prompt_dict["Память"][topic][i]["timestamp"]))
+        #        prompt_dict["Память"][topic][i].pop("timestamp")
+        
 
         dynamic_prompt = json.dumps(prompt_dict, ensure_ascii=False, indent=2)
         print(dynamic_prompt)
 
 
-        messages.append({"role": "user", "content": "```json\n" + prompts.user + dynamic_prompt + "\n```"})
+        messages.append({"role": "user", "content": "```json\n" + prompts.user + utils.replace_mentions_with_nicks(dynamic_prompt, message_discord) if message_discord else dynamic_prompt + "\n```"})
         
         # Добавляем в память
         self.memory.add_message(self.current_channel, new_msg)
@@ -133,31 +123,6 @@ class Alpha:
         print("Response:")
         print(response)
         response = json.loads(response)
-
-        # Создаем объект сообщения
-        #if not response["message_sequence"][0]:
-        #    return None
-        #new_msg = Message(
-        #    timestamp=datetime.now().timestamp(),
-        #    text=response["message_sequence"][0]["content"],
-        #    author="Alpha"
-        #)
-
-        # Добавляем в память
-        #self.memory.add_message(self.current_channel, new_msg)
-
-        new_notes = response["new_notes_or_edit_notes"]
-        for note in new_notes:
-            self.memory.add_note(Note(
-                timestamp=datetime.now().timestamp(),
-                text=note["content"],
-                id=note["id"],
-                type=note["type"]
-            ))
-        
-        for id in response["remove_notes"]:
-            self.memory.remove_note(id)
-        
         self.save_memory()
 
         # Обрабатываем ответ
